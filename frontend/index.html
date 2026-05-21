@@ -761,12 +761,19 @@
             sendMessage();
         }
 
+        let lastFailedMessage = '';
+
         async function sendMessage() {
             const input = document.getElementById('messageInput');
             const msg = input.value.trim();
             if (!msg) return;
             input.value = '';
-            addMessage(msg, 'user');
+            lastFailedMessage = '';
+            await doSendMessage(msg);
+        }
+
+        async function doSendMessage(msg, isRetry = false) {
+            if (!isRetry) addMessage(msg, 'user');
             document.getElementById('sendBtn').disabled = true;
             document.getElementById('typing').classList.add('show');
 
@@ -776,14 +783,35 @@
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ session_id: SESSION_ID, message: msg })
                 });
+
+                if (!res.ok) {
+                    const errData = await res.json().catch(() => ({}));
+                    throw new Error(errData.detail || `Server error (${res.status})`);
+                }
+
                 const data = await res.json();
                 document.getElementById('typing').classList.remove('show');
                 addMessage(data.reply, 'bot');
-            } catch {
+                lastFailedMessage = '';
+            } catch (err) {
                 document.getElementById('typing').classList.remove('show');
-                addMessage('⚠️ Backend not running. Please start the server with start.bat or python backend/app.py', 'bot');
+                lastFailedMessage = msg;
+                const errText = err.message || 'Could not reach the server';
+                addMessage(
+                    `⚠️ ${errText}<br>` +
+                    `<button onclick="retryMessage()" style="` +
+                    `margin-top:8px;padding:6px 16px;background:#1a6b3c;color:#fff;` +
+                    `border:none;border-radius:8px;cursor:pointer;font-size:12px;">↻ Retry</button>`,
+                    'bot'
+                );
             }
             document.getElementById('sendBtn').disabled = false;
+        }
+
+        function retryMessage() {
+            if (lastFailedMessage) {
+                doSendMessage(lastFailedMessage, true);
+            }
         }
 
         function addMessage(text, role) {

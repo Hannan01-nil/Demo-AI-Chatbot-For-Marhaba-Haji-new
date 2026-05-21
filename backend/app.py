@@ -9,7 +9,6 @@ import sqlite3
 import json
 from datetime import datetime, timedelta
 import uuid
-import google.generativeai as genai
 from dotenv import load_dotenv
 from apscheduler.schedulers.background import BackgroundScheduler
 import atexit
@@ -40,14 +39,7 @@ SENDGRID_API_KEY = os.getenv("SENDGRID_API_KEY")
 EMAIL_FROM = os.getenv("EMAIL_FROM")
 
 # ============ GEMINI AI SETUP ============
-GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
-if GOOGLE_API_KEY:
-    genai.configure(api_key=GOOGLE_API_KEY)
-    model = genai.GenerativeModel('gemini-1.5-flash')
-    print("✅ Gemini AI Ready")
-else:
-    print("❌ No Gemini API Key")
-    model = None
+from services.gemini_service import gemini_service
 
 # ============ DATABASE SETUP ============
 os.makedirs("database", exist_ok=True)
@@ -154,51 +146,6 @@ class AddToCartRequest(BaseModel):
 class RecoveryRequest(BaseModel):
     cart_id: str
     channel: str  # sms, email, both
-
-# ============ INTENT DETECTION ============
-def detect_intent(message):
-    msg = message.lower()
-    if any(w in msg for w in ["hi", "hello", "salam", "assalamu"]):
-        return "greeting"
-    if any(w in msg for w in ["package", "umrah", "hajj", "trip"]):
-        return "package"
-    if any(w in msg for w in ["visa", "document", "passport"]):
-        return "visa"
-    if any(w in msg for w in ["price", "cost", "how much"]):
-        return "price"
-    return "general"
-
-# ============ AI RESPONSE ============
-def get_ai_response(message, intent):
-    prompt = f"""You are Marhaba Haji, a friendly AI assistant for Hajj and Umrah travel.
-
-User message: {message}
-Intent: {intent}
-
-Available packages:
-- Economy Umrah: $850 for 7 days
-- Deluxe Umrah: $1500 for 14 days
-- Premium Hajj: $4500 for 21 days
-
-Visa info: $150-200, valid passport needed, meningitis vaccine.
-
-Respond in a friendly, helpful way. Keep it short (2-3 sentences). Use emojis. Be respectful.
-"""
-    try:
-        if model:
-            response = model.generate_content(prompt)
-            return response.text
-        else:
-            raise Exception("No model")
-    except:
-        if intent == "greeting":
-            return "Assalamu Alaikum! 👋 I'm Marhaba Haji. How can I help with your Umrah or Hajj plans?"
-        elif intent == "package":
-            return "We have Economy Umrah ($850/7 days) and Deluxe Umrah ($1500/14 days). Which interests you? 🕋"
-        elif intent == "visa":
-            return "Umrah visa costs $150-200. You need a valid passport (6 months) and meningitis vaccine. 📋"
-        else:
-            return "I can help with Umrah packages, visas, and hotels. What would you like to know? 🕋"
 
 # ============ SMS FUNCTIONS (TWILIO) ============
 def send_sms(to_number, message):
@@ -575,31 +522,52 @@ def detect_abandoned_carts():
 # ============ CHAT ENDPOINT ============
 @app.post("/chat/send", response_model=ChatResponse)
 async def chat(chat_request: ChatRequest):
-    """Main chat endpoint"""
+    """Main chat endpoint with real Gemini AI responses"""
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
-    
+
     cursor.execute("SELECT id FROM conversations WHERE session_id = ?", (chat_request.session_id,))
     conv = cursor.fetchone()
-    
+
     if not conv:
         conv_id = str(uuid.uuid4())
         cursor.execute("INSERT INTO conversations VALUES (?, ?, ?)", (conv_id, chat_request.session_id, datetime.now()))
     else:
         conv_id = conv[0]
-    
-    cursor.execute("INSERT INTO messages VALUES (?, ?, ?, ?, ?)", 
-                   (str(uuid.uuid4()), conv_id, "user", chat_request.message, datetime.now()))
-    
-    intent = detect_intent(chat_request.message)
-    reply = get_ai_response(chat_request.message, intent)
-    
-    cursor.execute("INSERT INTO messages VALUES (?, ?, ?, ?, ?)", 
-                   (str(uuid.uuid4()), conv_id, "assistant", reply, datetime.now()))
-    
+
+    now = datetime.now()
+
+    # Save user message
+    cursor.execute("INSERT INTO messages VALUES (?, ?, ?, ?, ?)",
+                   (str(uuid.uuid4()), conv_id, "user", chat_request.message, now))
+
+    # Load last 20 messages for context
+    cursor.execute("""
+        SELECT role, content FROM messages
+        WHERE conversation_id = ?
+        ORDER BY created_at ASC
+        LIMIT 20
+    """, (conv_id,))
+    raw_history = cursor.fetchall()
+
+    raw_messages = [{"role": r[0], "content": r[1]} for r in raw_history]
+    gemini_history = gemini_service.format_history_for_gemini(raw_messages)
+
+    try:
+        if not gemini_service.is_available():
+            raise RuntimeError("Gemini AI is not configured. Add GOOGLE_API_KEY to .env")
+
+        reply = gemini_service.generate_response(chat_request.message, gemini_history)
+    except Exception as e:
+        reply = f"⚠️ {str(e)}"
+
+    # Save bot response
+    cursor.execute("INSERT INTO messages VALUES (?, ?, ?, ?, ?)",
+                   (str(uuid.uuid4()), conv_id, "assistant", reply, now))
+
     conn.commit()
     conn.close()
-    
+
     return ChatResponse(reply=reply)
 
 @app.get("/")

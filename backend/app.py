@@ -31,16 +31,16 @@ app.add_middleware(
 )
 
 # ============ TWILIO SMS SETUP ============
-TWILIO_ACCOUNT_SID = "AC8e452c7468f6ad46a2978eb1a074dbb3"
-TWILIO_AUTH_TOKEN = "c374a898284346550a497d98c45b724b"
-TWILIO_PHONE_NUMBER = "+18782157365"
+TWILIO_ACCOUNT_SID = os.getenv("TWILIO_ACCOUNT_SID")
+TWILIO_AUTH_TOKEN = os.getenv("TWILIO_AUTH_TOKEN")
+TWILIO_PHONE_NUMBER = os.getenv("TWILIO_PHONE_NUMBER")
 
 # ============ SENDGRID EMAIL SETUP ============
 SENDGRID_API_KEY = os.getenv("SENDGRID_API_KEY")
 EMAIL_FROM = os.getenv("EMAIL_FROM")
 
 # ============ GEMINI AI SETUP ============
-GOOGLE_API_KEY = "AIzaSyCCc_rpwqft5j3MMNiC2AyW-RrztgmpT1Q"
+GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
 if GOOGLE_API_KEY:
     genai.configure(api_key=GOOGLE_API_KEY)
     model = genai.GenerativeModel('gemini-1.5-flash')

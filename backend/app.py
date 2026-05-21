@@ -31,16 +31,16 @@ app.add_middleware(
 )
 
 # ============ TWILIO SMS SETUP ============
-TWILIO_ACCOUNT_SID = os.getenv("TWILIO_ACCOUNT_SID")
-TWILIO_AUTH_TOKEN = os.getenv("TWILIO_AUTH_TOKEN")
-TWILIO_PHONE_NUMBER = os.getenv("TWILIO_PHONE_NUMBER")
+TWILIO_ACCOUNT_SID = "AC8e452c7468f6ad46a2978eb1a074dbb3"
+TWILIO_AUTH_TOKEN = "c374a898284346550a497d98c45b724b"
+TWILIO_PHONE_NUMBER = "+18782157365"
 
 # ============ SENDGRID EMAIL SETUP ============
 SENDGRID_API_KEY = os.getenv("SENDGRID_API_KEY")
 EMAIL_FROM = os.getenv("EMAIL_FROM")
 
 # ============ GEMINI AI SETUP ============
-GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
+GOOGLE_API_KEY = "AIzaSyCCc_rpwqft5j3MMNiC2AyW-RrztgmpT1Q"
 if GOOGLE_API_KEY:
     genai.configure(api_key=GOOGLE_API_KEY)
     model = genai.GenerativeModel('gemini-1.5-flash')
@@ -388,6 +388,7 @@ async def add_to_cart(session_id: str, request: AddToCartRequest):
 @app.get("/cart/{session_id}")
 async def get_cart(session_id: str):
     """Get current cart"""
+    from fastapi.responses import JSONResponse
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
     
@@ -396,12 +397,12 @@ async def get_cart(session_id: str):
     conn.close()
     
     if cart:
-        return {
+        return JSONResponse(content={
             "cart_id": cart[0],
             "items": json.loads(cart[1]),
             "total": cart[2]
-        }
-    return {"cart_id": None, "items": [], "total": 0}
+        }, headers={"Cache-Control": "no-store, no-cache, must-revalidate"})
+    return JSONResponse(content={"cart_id": None, "items": [], "total": 0}, headers={"Cache-Control": "no-store, no-cache, must-revalidate"})
 
 @app.delete("/cart/remove/{session_id}/{package_id}")
 async def remove_from_cart(session_id: str, package_id: str):
@@ -639,6 +640,44 @@ def get_abandoned_stats():
         "recovery_rate": round(recovery_rate, 2),
         "messages_sent": messages_sent
     }
+
+# ============ DEMO ENDPOINTS ============
+@app.post("/demo/abandon/{session_id}")
+async def demo_abandon(session_id: str):
+    """Demo: mark cart as abandoned and return items info"""
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+
+    cursor.execute("SELECT id, items, total_amount FROM carts WHERE session_id = ? AND status = 'active'", (session_id,))
+    cart = cursor.fetchone()
+
+    if cart:
+        cart_id = cart[0]
+        items = json.loads(cart[1])
+        total = cart[2]
+
+        cursor.execute('''
+            UPDATE carts SET status = 'abandoned', abandoned_at = ?
+            WHERE id = ?
+        ''', (datetime.now(), cart_id))
+
+        conn.commit()
+        conn.close()
+        return {"status": "abandoned", "cart_id": cart_id, "items": items, "total": total}
+
+    conn.close()
+    return {"status": "empty", "cart_id": None, "items": [], "total": 0}
+
+class DemoSmsRequest(BaseModel):
+    phone: str
+    message: Optional[str] = None
+
+@app.post("/api/demo-sms")
+async def demo_sms(request: DemoSmsRequest):
+    """Simple demo endpoint to send SMS to any number"""
+    msg = request.message or "🕋 Assalamu Alaikum! This is a test SMS from Marhaba Haji Chatbot. Your booking is ready! Reply HELP for assistance."
+    result = send_sms(request.phone, msg)
+    return {"status": result["status"], "to": request.phone, "result": result}
 
 # ============ SCHEDULER ============
 scheduler = BackgroundScheduler()

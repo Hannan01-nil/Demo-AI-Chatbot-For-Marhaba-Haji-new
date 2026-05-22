@@ -1,0 +1,10 @@
+INFO:     Started server process [11840]
+INFO:     Waiting for application startup.
+INFO:     Application startup complete.
+INFO:     Uvicorn running on http://127.0.0.1:8000 (Press CTRL+C to quit)
+C:\Users\Mohammed Aakif\marhaba-chatbot\backend\app.py:408: DeprecationWarning: The default datetime adapter is deprecated as of Python 3.12; see the sqlite3 documentation for suggested replacement recipes
+  cursor.execute('''
+C:\Users\Mohammed Aakif\marhaba-chatbot\backend\app.py:710: DeprecationWarning: The default datetime adapter is deprecated as of Python 3.12; see the sqlite3 documentation for suggested replacement recipes
+  cursor.execute('''
+C:\Users\Mohammed Aakif\marhaba-chatbot\backend\app.py:544: DeprecationWarning: The default datetime adapter is deprecated as of Python 3.12; see the sqlite3 documentation for suggested replacement recipes
+  cursor.execute('''

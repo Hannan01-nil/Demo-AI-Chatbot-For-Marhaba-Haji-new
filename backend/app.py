@@ -1,6 +1,6 @@
 # backend/app.py - Complete with Twilio SMS + Email Recovery
 
-from fastapi import FastAPI, HTTPException, BackgroundTasks
+from fastapi import FastAPI, HTTPException, BackgroundTasks, Request
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import Optional
@@ -29,10 +29,17 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# ============ TWILIO SMS SETUP ============
+# ============ TWILIO SMS & WHATSAPP SETUP ============
 TWILIO_ACCOUNT_SID = os.getenv("TWILIO_ACCOUNT_SID")
 TWILIO_AUTH_TOKEN = os.getenv("TWILIO_AUTH_TOKEN")
 TWILIO_PHONE_NUMBER = os.getenv("TWILIO_PHONE_NUMBER")
+TWILIO_WHATSAPP_NUMBER = "+14155238886"  # Twilio WhatsApp Sandbox (always this number)
+
+def normalize_phone(phone):
+    """Ensure phone number has + prefix for E.164 format."""
+    if phone and not phone.startswith("+"):
+        return "+" + phone
+    return phone
 
 # ============ SENDGRID EMAIL SETUP ============
 SENDGRID_API_KEY = os.getenv("SENDGRID_API_KEY")
@@ -150,6 +157,7 @@ class RecoveryRequest(BaseModel):
 # ============ SMS FUNCTIONS (TWILIO) ============
 def send_sms(to_number, message):
     """Send real SMS using Twilio"""
+    to_number = normalize_phone(to_number)
     try:
         if not TWILIO_ACCOUNT_SID or not TWILIO_AUTH_TOKEN:
             print("⚠️ Twilio not configured - simulating SMS")
@@ -181,6 +189,89 @@ def simulate_sms(to_number, message):
     print(message)
     print("="*60 + "\n")
     return {"status": "simulated"}
+
+# ============ WHATSAPP FUNCTIONS (TWILIO SANDBOX) ============
+def send_whatsapp(to_number, message):
+    """Send WhatsApp message via Twilio Sandbox. Falls back to SMS if it fails."""
+    to_number = normalize_phone(to_number)
+    try:
+        if not TWILIO_ACCOUNT_SID or not TWILIO_AUTH_TOKEN:
+            print("⚠️ Twilio not configured - simulating WhatsApp")
+            return simulate_whatsapp(to_number, message)
+
+        from twilio.rest import Client
+        client = Client(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN)
+
+        msg = client.messages.create(
+            body=message,
+            from_=f"whatsapp:{TWILIO_WHATSAPP_NUMBER}",
+            to=f"whatsapp:{to_number}"
+        )
+
+        print(f"✅ WhatsApp sent to {to_number} - SID: {msg.sid}")
+        return {"status": "sent", "sid": msg.sid, "channel": "whatsapp"}
+
+    except Exception as e:
+        error_str = str(e)
+        print(f"❌ WhatsApp failed: {error_str[:100]}")
+        # If not 63016 (not opted in), log it anyway
+        if "63016" not in error_str:
+            print("   (Not an opt-in issue, SMS fallback will be used)")
+        return {"status": "failed", "error": error_str, "channel": "whatsapp"}
+
+def simulate_whatsapp(to_number, message):
+    """Simulate WhatsApp (for testing without Twilio)"""
+    print("\n" + "="*60)
+    print("💬 SIMULATED WHATSAPP MESSAGE")
+    print("="*60)
+    print(f"To: {to_number}")
+    print("-"*60)
+    print(message)
+    print("="*60 + "\n")
+    return {"status": "simulated", "channel": "whatsapp"}
+
+def send_whatsapp_template(to_number, content_sid, content_variables):
+    """Send WhatsApp using a pre-approved Twilio Content Template.
+    
+    Args:
+        to_number: Customer phone (e.g. +919790562321)
+        content_sid: Twilio Content SID (e.g. HXb5b62575e6e4ff6129ad7c8efe1f983e)
+        content_variables: dict of template variables (e.g. {"1":"12/1","2":"3pm"})
+    """
+    try:
+        if not TWILIO_ACCOUNT_SID or not TWILIO_AUTH_TOKEN:
+            print("⚠️ Twilio not configured - simulating WhatsApp template")
+            return simulate_whatsapp(to_number, f"[TEMPLATE {content_sid}] {content_variables}")
+
+        from twilio.rest import Client
+        client = Client(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN)
+
+        msg = client.messages.create(
+            from_=f"whatsapp:{TWILIO_WHATSAPP_NUMBER}",
+            content_sid=content_sid,
+            content_variables=json.dumps(content_variables),
+            to=f"whatsapp:{to_number}"
+        )
+
+        print(f"✅ WhatsApp template sent to {to_number} - SID: {msg.sid}")
+        return {"status": "sent", "sid": msg.sid, "channel": "whatsapp_template"}
+
+    except Exception as e:
+        error_str = str(e)
+        print(f"❌ WhatsApp template failed: {error_str[:100]}")
+        return {"status": "failed", "error": error_str, "channel": "whatsapp_template"}
+
+def send_recovery_message(to_number, message):
+    """Try WhatsApp first, fall back to SMS if WhatsApp fails."""
+    wa_result = send_whatsapp(to_number, message)
+    if wa_result["status"] == "sent":
+        return wa_result
+
+    # WhatsApp failed — try SMS
+    print("↩️ Falling back to SMS...")
+    sms_result = send_sms(to_number, message)
+    sms_result["channel"] = "sms"
+    return sms_result
 
 # ============ EMAIL FUNCTIONS (SENDGRID) ============
 def send_email(to_email, subject, body):
@@ -310,7 +401,7 @@ async def add_to_cart(session_id: str, request: AddToCartRequest):
         cursor.execute('''
             UPDATE carts SET items = ?, total_amount = ?, last_activity = ?, user_phone = COALESCE(?, user_phone), user_email = COALESCE(?, user_email)
             WHERE id = ?
-        ''', (json.dumps(items), total, now, request.user_phone, request.user_email, cart_id))
+        ''', (json.dumps(items), total, now, normalize_phone(request.user_phone), request.user_email, cart_id))
     else:
         cart_id = str(uuid.uuid4())
         items = [{
@@ -325,7 +416,7 @@ async def add_to_cart(session_id: str, request: AddToCartRequest):
         cursor.execute('''
             INSERT INTO carts (id, session_id, user_phone, user_email, items, total_amount, last_activity, created_at)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-        ''', (cart_id, session_id, request.user_phone, request.user_email, json.dumps(items), total, now, now))
+        ''', (cart_id, session_id, normalize_phone(request.user_phone), request.user_email, json.dumps(items), total, now, now))
     
     conn.commit()
     conn.close()
@@ -437,7 +528,7 @@ async def manual_recovery(cart_id: str, request: RecoveryRequest):
     
     if request.channel in ["sms", "both"] and user_phone:
         message = generate_recovery_message(items, total, cart_id, "sms")
-        results["sms"] = send_sms(user_phone, message)
+        results["sms"] = send_recovery_message(user_phone, message)
         cursor.execute("UPDATE recovery_attempts SET message_sent = 1 WHERE id = ?", (recovery_id,))
     
     if request.channel in ["email", "both"] and user_email:
@@ -505,7 +596,7 @@ def detect_abandoned_carts():
             message = generate_recovery_message(items, total, cart_id, "sms" if "sms" in channel else "email")
             
             if "sms" in channel and user_phone:
-                send_sms(user_phone, message)
+                send_recovery_message(user_phone, message)
             
             if "email" in channel and user_email:
                 email_body = generate_recovery_message(items, total, cart_id, "email")
@@ -647,6 +738,62 @@ async def demo_sms(request: DemoSmsRequest):
     result = send_sms(request.phone, msg)
     return {"status": result["status"], "to": request.phone, "result": result}
 
+# ============ WHATSAPP ACTIVATION ============
+WHATSAPP_SANDBOX_CODE = "marhaba"  # User sends "join marhaba" to activate
+
+@app.get("/whatsapp/instructions")
+def whatsapp_instructions():
+    """Return WhatsApp activation instructions for display in chat/frontend"""
+    return {
+        "whatsapp_number": TWILIO_WHATSAPP_NUMBER,
+        "activation_code": WHATSAPP_SANDBOX_CODE,
+        "instructions": [
+            f"Open WhatsApp on your phone",
+            f"Send a message to {TWILIO_WHATSAPP_NUMBER}",
+            f"Type: join {WHATSAPP_SANDBOX_CODE}",
+            f"You'll get a reply confirming activation",
+            f"After that, you'll receive booking updates on WhatsApp! 🎉"
+        ],
+        "activation_message": f"To receive WhatsApp messages, send 'join {WHATSAPP_SANDBOX_CODE}' to {TWILIO_WHATSAPP_NUMBER} on WhatsApp. It's free!"
+    }
+
+@app.post("/whatsapp/activation-webhook")
+async def whatsapp_webhook(request: Request):
+    """
+    Twilio webhook for WhatsApp incoming messages.
+    When customer sends "join marhaba", log the opt-in.
+    Set this URL as your Twilio WhatsApp Sandbox webhook in Twilio Console.
+    """
+    form = await request.form()
+    body = form.get("Body", "").strip().lower()
+    wa_id = form.get("WaId", "")
+    from_num = form.get("From", "").replace("whatsapp:", "")
+
+    print(f"📩 WhatsApp incoming from {from_num}: '{body}'")
+
+    if "join" in body:
+        print(f"✅ WhatsApp opt-in confirmed for {from_num}")
+        # Log opt-in to database
+        conn = sqlite3.connect(DB_PATH)
+        cursor = conn.cursor()
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS whatsapp_optins (
+                phone TEXT PRIMARY KEY,
+                opted_in_at TIMESTAMP,
+                last_active TIMESTAMP
+            )
+        """)
+        cursor.execute("""
+            INSERT OR REPLACE INTO whatsapp_optins (phone, opted_in_at, last_active)
+            VALUES (?, ?, ?)
+        """, (from_num, datetime.now(), datetime.now()))
+        conn.commit()
+        conn.close()
+        return {"message": "Opt-in confirmed"}
+
+    print(f"ℹ️ Non-join WhatsApp message from {from_num}: '{body}'")
+    return {"message": "ignored"}
+
 # ============ SCHEDULER ============
 scheduler = BackgroundScheduler()
 scheduler.add_job(func=detect_abandoned_carts, trigger="interval", minutes=15, id="abandoned_cart_check")
@@ -660,7 +807,7 @@ if __name__ == "__main__":
     print("🚀 Marhaba Haji Chatbot with Recovery")
     print("📍 http://localhost:8000")
     print("📚 http://localhost:8000/docs")
-    print("📱 SMS via Twilio | 📧 Email via SendGrid")
+    print("📱 SMS via Twilio | 💬 WhatsApp via Twilio Sandbox | 📧 Email via SendGrid")
     print("🔄 Abandoned cart detection every 15 min")
     print("="*50 + "\n")
     uvicorn.run(app, host="127.0.0.1", port=8000)

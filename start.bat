@@ -3,19 +3,21 @@ title Marhaba Haji Chatbot
 color 0A
 
 echo ========================================
-echo    Marhaba Haji Chatbot
+echo    MARHABA HAJI CHATBOT
 echo ========================================
 echo.
 
-echo [1/3] Activating virtual environment...
-cd C:\Users\Mohammed Aakif\Desktop\marhaba-chatbot
-call venv\Scripts\activate
+cd /d "%~dp0"
 
-echo [2/3] Installing required packages...
-pip install fastapi uvicorn google-generativeai python-dotenv --quiet
+echo [1/3] Installing required packages...
+pip install -r requirements.txt --quiet
 
-echo [3/3] Starting backend server...
+echo [2/3] Starting backend server...
 cd backend
-python app.py
+start python -X utf8 app.py
 
+timeout /t 3 /nobreak >nul
+start ..\frontend\index.html
+
+echo System Running at http://localhost:8000
 pause

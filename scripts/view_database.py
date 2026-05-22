@@ -2,57 +2,65 @@ import os
 import sys
 import json
 from datetime import datetime
+import dns.resolver
+dns.resolver.get_default_resolver().nameservers = ['8.8.8.8', '1.1.1.1']
+
+from pymongo import MongoClient
+from dotenv import load_dotenv
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "backend"))
-from utils.db_viewer import (
+from database.viewer import (
     show_recent_carts, show_abandoned_carts,
     show_recovery_attempts, show_statistics, print_border, print_header
 )
 
-DB_PATH = os.path.join(os.path.dirname(__file__), "..", "backend", "database", "marhaba.db")
+load_dotenv(os.path.join(os.path.dirname(__file__), "..", "backend", ".env"))
+
+MONGODB_URI = os.getenv("MONGODB_URI", "mongodb://localhost:27017")
+MONGODB_DB_NAME = os.getenv("MONGODB_DB_NAME", "marhaba_haji")
+
+client = MongoClient(MONGODB_URI)
+db = client[MONGODB_DB_NAME]
 
 
 def export_to_json():
     try:
-        import sqlite3
-        conn = sqlite3.connect(DB_PATH)
-        cursor = conn.cursor()
+        carts = list(db.carts.find({}))
+        attempts = list(db.recovery_attempts.find({}))
+        conversations = list(db.conversations.find({}))
+        messages = list(db.messages.find({}))
 
-        cursor.execute("SELECT * FROM carts")
-        columns = [desc[0] for desc in cursor.description]
-        carts = [dict(zip(columns, row)) for row in cursor.fetchall()]
-
-        cursor.execute("SELECT * FROM recovery_attempts")
-        columns = [desc[0] for desc in cursor.description]
-        attempts = [dict(zip(columns, row)) for row in cursor.fetchall()]
-
-        cursor.execute("SELECT * FROM conversations")
-        columns = [desc[0] for desc in cursor.description]
-        conversations = [dict(zip(columns, row)) for row in cursor.fetchall()]
-
-        cursor.execute("SELECT * FROM messages")
-        columns = [desc[0] for desc in cursor.description]
-        messages = [dict(zip(columns, row)) for row in cursor.fetchall()]
-
-        conn.close()
+        def serialize_docs(docs):
+            result = []
+            for d in docs:
+                serialized = {}
+                for k, v in d.items():
+                    if isinstance(v, datetime):
+                        serialized[k] = v.isoformat()
+                    elif k == "_id":
+                        serialized[k] = str(v)
+                    else:
+                        serialized[k] = v
+                result.append(serialized)
+            return result
 
         data = {
             "exported_at": datetime.now().isoformat(),
-            "carts": carts,
-            "recovery_attempts": attempts,
-            "conversations": conversations,
-            "messages": messages
+            "carts": serialize_docs(carts),
+            "recovery_attempts": serialize_docs(attempts),
+            "conversations": serialize_docs(conversations),
+            "messages": serialize_docs(messages)
         }
 
         export_path = os.path.join(os.path.dirname(__file__), "..", "database_export.json")
         with open(export_path, "w") as f:
             json.dump(data, f, indent=2, default=str)
 
-        print(f"  ✅ Exported to {export_path}")
+        print(f"  Exported to {export_path}")
         print(f"     Carts: {len(carts)}, Recovery: {len(attempts)}")
         print(f"     Conversations: {len(conversations)}, Messages: {len(messages)}")
     except Exception as e:
-        print(f"  ❌ Export failed: {e}")
+        print(f"  Export failed: {e}")
 
 
 def main():

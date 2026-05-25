@@ -667,8 +667,8 @@
 
                 <div class="sidebar-card" style="border: 2px solid #e74c3c; background: #fff5f5;">
                     <h3 style="color:#c0392b;">📱 Abandon Cart Demo</h3>
-                    <p style="font-size:12px;color:#666;margin-bottom:10px;">Add a package, then click this button. It will <strong>clear your cart</strong>, <strong>send SMS</strong> to 9790562321, and ask <strong>why you didn't complete</strong> the booking.</p>
-                    <button class="demo-sms-btn" id="demoSmsBtn" onclick="abandonDemo()">🚀 Abandon Cart & Send SMS</button>
+                    <p style="font-size:12px;color:#666;margin-bottom:10px;">Save your <strong>phone number</strong> above (with country code, e.g. +919790562321), then click this button. It will <strong>send SMS + WhatsApp</strong> to your number and ask <strong>why you didn't complete</strong> the booking. Your cart stays intact.</p>
+                    <button class="demo-sms-btn" id="demoSmsBtn" onclick="abandonDemo()">🚀 Send SMS + WhatsApp</button>
                 </div>
 
                 <div class="sidebar-card">
@@ -717,7 +717,23 @@
         let userPhone = localStorage.getItem('userPhone') || '';
         let userEmail = localStorage.getItem('userEmail') || '';
 
-        if (userPhone) document.getElementById('userPhone').value = userPhone;
+        function normalizePhone(phone) {
+            if (!phone) return '';
+            let p = phone.trim().replace(/\s/g, '');
+            if (p.toLowerCase().startsWith('whatsapp:')) p = p.slice(9);
+            if (p && !p.startsWith('+')) p = '+' + p.replace(/^0+/, '');
+            return p;
+        }
+
+        function getAlertPhone() {
+            const fromInput = document.getElementById('userPhone').value.trim();
+            return normalizePhone(userPhone || fromInput || localStorage.getItem('userPhone') || '');
+        }
+
+        if (userPhone) {
+            userPhone = normalizePhone(userPhone);
+            document.getElementById('userPhone').value = userPhone;
+        }
         if (userEmail) document.getElementById('userEmail').value = userEmail;
         if (userPhone || userEmail) showContactSaved();
 
@@ -747,13 +763,22 @@
         }
 
         function saveContact() {
-            userPhone = document.getElementById('userPhone').value.trim();
-            userEmail = document.getElementById('userEmail').value.trim();
-            if (!userPhone && !userEmail) { showToast('Enter phone or email', 'error'); return; }
-            localStorage.setItem('userPhone', userPhone);
+            const phone = normalizePhone(document.getElementById('userPhone').value.trim());
+            const email = document.getElementById('userEmail').value.trim();
+            if (!phone && !email) { showToast('Enter phone or email', 'error'); return; }
+            if (phone && phone.length < 10) {
+                showToast('Use full number with country code, e.g. +919790562321', 'error');
+                return;
+            }
+            userPhone = phone;
+            userEmail = email;
+            if (phone) {
+                document.getElementById('userPhone').value = phone;
+                localStorage.setItem('userPhone', userPhone);
+            }
             localStorage.setItem('userEmail', userEmail);
             showContactSaved();
-            showToast('✅ Contact info saved!');
+            showToast('Contact saved — alerts will go to ' + (phone || email));
         }
 
         function quickSend(msg) {
@@ -928,63 +953,90 @@
 
         async function abandonDemo() {
             const btn = document.getElementById('demoSmsBtn');
+            const defaultLabel = '🚀 Send Abandon Reminder';
             btn.disabled = true;
-            btn.innerHTML = '⏳ Abandoning cart...';
+            btn.innerHTML = '⏳ Sending alerts...';
 
             try {
-                // Step 1: Abandon the cart
-                const abandonRes = await fetch(`http://localhost:8000/demo/abandon/${SESSION_ID}`, { method: 'POST' });
-                const abandon = await abandonRes.json();
-                const hadItems = abandon.items && abandon.items.length > 0;
-
-                // Step 2: Update cart display to 0
-                await updateCartBadge();
-                if (document.getElementById('cartModal').classList.contains('show')) {
-                    await renderCart();
+                const phone = getAlertPhone();
+                if (!phone) {
+                    showToast('Save your phone with country code first (e.g. +919790562321)', 'error');
+                    document.getElementById('contactForm').style.display = 'flex';
+                    document.getElementById('contactSaved').classList.remove('show');
+                    return;
                 }
+                userPhone = phone;
+                localStorage.setItem('userPhone', phone);
 
-                if (hadItems) {
-                    showToast('🛒 Cart abandoned! Sending SMS...');
-                    btn.innerHTML = '⏳ Sending SMS...';
+                showToast('Sending SMS + WhatsApp to ' + phone + '...', 'success');
+                btn.innerHTML = '⏳ Please wait (Twilio)...';
 
-                    // Step 3: Send SMS
-                    const smsRes = await fetch('http://localhost:8000/api/demo-sms', {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ phone: '+919790562321' })
-                    });
-                    const sms = await smsRes.json();
-
-                    if (sms.status === 'sent' || sms.status === 'simulated') {
-                        showToast('✅ SMS sent to +919790562321!');
-                    } else {
-                        showToast('❌ SMS failed: ' + (sms.result?.message || 'unknown'), 'error');
+                let cartTotal = 1500;
+                let packageName = 'Deluxe Umrah Package';
+                try {
+                    const cartRes = await fetch('http://localhost:8000/demo/cart/' + SESSION_ID);
+                    const cart = await cartRes.json();
+                    if (cart.items && cart.items.length > 0) {
+                        cartTotal = cart.total;
+                        packageName = cart.items.map(i => i.name).join(', ');
                     }
-
-                    // Step 4: Bot asks for feedback
-                    setTimeout(() => {
-                        addMessage(
-                            '🕋 Assalamu Alaikum! I noticed you left items in your cart. 😔<br><br>' +
-                            'Could you tell me <strong>why you didn\'t complete your booking</strong>? ' +
-                            'Your feedback helps us serve you better! 🙏<br><br>' +
-                            '• Was the <strong>price</strong> too high?<br>' +
-                            '• Did you need more <strong>time</strong>?<br>' +
-                            '• Were you looking for a <strong>different package</strong>?<br>' +
-                            '• Or something <strong>else</strong>?<br><br>' +
-                            'Let me know — I\'m here to help! 🤲',
-                            'bot'
-                        );
-                    }, 500);
-
-                } else {
-                    showToast('ℹ️ Add a package to cart first', 'info');
+                } catch (e) {
+                    console.warn('Cart fetch:', e);
                 }
-            } catch {
-                showToast('❌ Backend not running', 'error');
-            }
 
-            btn.disabled = false;
-            btn.innerHTML = '🚀 Abandon Cart & Send SMS';
+                const abandonRes = await fetch('http://localhost:8000/api/demo-abandon', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        phone: phone,
+                        cart_total: cartTotal,
+                        package_name: packageName
+                    })
+                });
+
+                let result = {};
+                try {
+                    result = await abandonRes.json();
+                } catch (e) {
+                    result = {};
+                }
+
+                if (!abandonRes.ok) {
+                    const err = result.detail || result.message || ('Server error ' + abandonRes.status);
+                    showToast('Failed: ' + (typeof err === 'string' ? err : JSON.stringify(err)), 'error');
+                    return;
+                }
+
+                const smsOk = result.sms?.status === 'sent';
+                const waOk = result.whatsapp?.status === 'sent';
+
+                if (smsOk && waOk) {
+                    showToast('SMS + WhatsApp sent to ' + phone + '. Check your phone now.', 'success');
+                    addMessage(
+                        'Assalamu Alaikum! SMS and WhatsApp reminders were sent to <strong>' + phone + '</strong> for your cart (' + packageName + ', $' + cartTotal + ').<br><br>' +
+                        'Could you tell me <strong>why you did not complete your booking</strong>? Your feedback helps us serve you better.',
+                        'bot'
+                    );
+                } else if (smsOk || waOk) {
+                    const parts = [];
+                    if (smsOk) parts.push('SMS');
+                    if (waOk) parts.push('WhatsApp');
+                    const failed = [];
+                    if (!smsOk) failed.push('SMS: ' + (result.sms?.message || 'failed'));
+                    if (!waOk) failed.push('WhatsApp: ' + (result.whatsapp?.message || 'failed — join Twilio sandbox'));
+                    showToast(parts.join(' + ') + ' sent. ' + failed.join('; '), 'error');
+                } else {
+                    const smsErr = result.sms?.message || 'SMS failed';
+                    const waErr = result.whatsapp?.message || 'WhatsApp failed';
+                    showToast(smsErr + ' | ' + waErr, 'error');
+                }
+            } catch (err) {
+                console.error(err);
+                showToast('Backend not running. Start: cd backend && python app.py', 'error');
+            } finally {
+                btn.disabled = false;
+                btn.innerHTML = defaultLabel;
+            }
         }
 
         async function removeItem(packageId) {

@@ -1,16 +1,19 @@
 # backend/app.py - Complete with Twilio SMS + Email Recovery (MongoDB)
 
-from fastapi import FastAPI, HTTPException, BackgroundTasks
+from fastapi import FastAPI, HTTPException, BackgroundTasks, Form, Response
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import Optional
 import os
+import asyncio
+import re
 from datetime import datetime, timedelta
 import uuid
 from dotenv import load_dotenv
 from apscheduler.schedulers.background import BackgroundScheduler
 import atexit
 import requests
+from twilio.twiml.messaging_response import MessagingResponse
 
 from database.connection import db
 from services.gemini_service import gemini_service
@@ -34,6 +37,7 @@ app.add_middleware(
 TWILIO_ACCOUNT_SID = os.getenv("TWILIO_ACCOUNT_SID")
 TWILIO_AUTH_TOKEN = os.getenv("TWILIO_AUTH_TOKEN")
 TWILIO_PHONE_NUMBER = os.getenv("TWILIO_PHONE_NUMBER")
+WHATSAPP_SANDBOX_NUMBER = "whatsapp:+14155238886"
 
 # ============ SENDGRID EMAIL SETUP ============
 SENDGRID_API_KEY = os.getenv("SENDGRID_API_KEY")
@@ -55,15 +59,36 @@ class AddToCartRequest(BaseModel):
 
 class RecoveryRequest(BaseModel):
     cart_id: str
-    channel: str  # sms, email, both
+    channel: str  # sms, whatsapp, email, both
 
-# ============ SMS FUNCTIONS (TWILIO) ============
-def send_sms(to_number, message):
-    """Send real SMS using Twilio"""
+# ============ PHONE + SMS (TWILIO) ============
+def normalize_phone(phone: str) -> str:
+    """E.164 format required by Twilio (+country code)."""
+    if not phone:
+        return ""
+    p = re.sub(r"[^\d+]", "", str(phone).strip())
+    if p.lower().startswith("whatsapp:"):
+        p = p[9:]
+    if p and not p.startswith("+"):
+        p = "+" + p.lstrip("0")
+    return p
+
+
+def send_sms(to_number, message, strict: bool = False):
+    """Send real SMS using Twilio. strict=True returns error instead of simulating."""
+    to_number = normalize_phone(to_number)
     try:
         if not TWILIO_ACCOUNT_SID or not TWILIO_AUTH_TOKEN:
+            if strict:
+                return {"status": "error", "message": "Twilio not configured in .env"}
             print("Twilio not configured - simulating SMS")
             return simulate_sms(to_number, message)
+
+        if TWILIO_PHONE_NUMBER and to_number == normalize_phone(TWILIO_PHONE_NUMBER):
+            return {
+                "status": "error",
+                "message": "Cannot SMS your own Twilio number. Use your mobile (e.g. +919790562321).",
+            }
 
         from twilio.rest import Client
         client = Client(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN)
@@ -79,6 +104,8 @@ def send_sms(to_number, message):
 
     except Exception as e:
         print(f"SMS failed: {e}")
+        if strict:
+            return {"status": "error", "message": str(e)}
         return simulate_sms(to_number, message)
 
 def simulate_sms(to_number, message):
@@ -91,6 +118,34 @@ def simulate_sms(to_number, message):
     print(message)
     print("="*60 + "\n")
     return {"status": "simulated"}
+
+def send_whatsapp(to_number, message, strict: bool = False):
+    """Send WhatsApp message using Twilio Sandbox"""
+    to_number = normalize_phone(to_number)
+    try:
+        if not TWILIO_ACCOUNT_SID or not TWILIO_AUTH_TOKEN:
+            if strict:
+                return {"status": "error", "message": "Twilio not configured in .env"}
+            print("Twilio not configured - simulating WhatsApp")
+            return simulate_sms(to_number, message)
+
+        from twilio.rest import Client
+        client = Client(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN)
+
+        message_obj = client.messages.create(
+            body=message,
+            from_=WHATSAPP_SANDBOX_NUMBER,
+            to=f"whatsapp:{to_number}"
+        )
+
+        print(f"WhatsApp sent to {to_number} - SID: {message_obj.sid}")
+        return {"status": "sent", "sid": message_obj.sid}
+
+    except Exception as e:
+        print(f"WhatsApp failed: {e}")
+        if strict:
+            return {"status": "error", "message": str(e)}
+        return simulate_sms(to_number, message)
 
 # ============ EMAIL FUNCTIONS (SENDGRID) ============
 def send_email(to_email, subject, body):
@@ -142,7 +197,7 @@ def generate_recovery_message(items, total, cart_id, channel):
 
     resume_url = f"http://localhost:8000/cart/resume/{cart_id}"
 
-    if channel == "sms":
+    if channel in ("sms", "whatsapp"):
         return f"""Assalamu Alaikum!
 
 You left {items_text} in your cart (Total: ${total}).
@@ -348,6 +403,14 @@ async def manual_recovery(cart_id: str, request: RecoveryRequest):
             {"$set": {"message_sent": True}}
         )
 
+    if request.channel in ["whatsapp", "both"] and user_phone:
+        message = generate_recovery_message(items, total, cart_id, "whatsapp")
+        results["whatsapp"] = send_whatsapp(user_phone, message)
+        db.recovery_attempts.update_one(
+            {"_id": recovery_id},
+            {"$set": {"message_sent": True}}
+        )
+
     if request.channel in ["email", "both"] and user_email:
         message = generate_recovery_message(items, total, cart_id, "email")
         results["email"] = send_email(user_email, "Complete Your Umrah Booking - Cart Recovery", message)
@@ -387,11 +450,13 @@ def detect_abandoned_carts():
 
         # Determine recovery channel based on attempt number
         if attempts == 0:
-            channel = "sms" if user_phone else "email" if user_email else None
+            channel = "whatsapp" if user_phone else "email" if user_email else None
         elif attempts == 1:
+            channel = "sms" if user_phone else "email" if user_email else None
+        elif attempts == 2:
             channel = "email" if user_email else "sms" if user_phone else None
         else:
-            channel = "both" if (user_phone and user_email) else "sms" if user_phone else "email" if user_email else None
+            channel = "both" if (user_phone and user_email) else "whatsapp" if user_phone else "email" if user_email else None
 
         if channel:
             recovery_id = str(uuid.uuid4())
@@ -407,12 +472,16 @@ def detect_abandoned_carts():
                 "created_at": datetime.now()
             })
 
-            message = generate_recovery_message(items, total, cart_id, "sms" if "sms" in channel else "email")
+            message = generate_recovery_message(items, total, cart_id, "sms" if "sms" in channel else "email" if "email" in channel else "whatsapp")
 
-            if "sms" in channel and user_phone:
+            if "whatsapp" == channel and user_phone:
+                send_whatsapp(user_phone, message)
+            elif "sms" == channel and user_phone:
                 send_sms(user_phone, message)
-
-            if "email" in channel and user_email:
+            elif "email" == channel and user_email:
+                send_email(user_email, "Complete Your Umrah Booking - Special Offer", message)
+            elif "both" == channel and user_phone and user_email:
+                send_sms(user_phone, message)
                 email_body = generate_recovery_message(items, total, cart_id, "email")
                 send_email(user_email, "Complete Your Umrah Booking - Special Offer", email_body)
 
@@ -506,17 +575,13 @@ def get_abandoned_stats():
     }
 
 # ============ DEMO ENDPOINTS ============
-@app.post("/demo/abandon/{session_id}")
-async def demo_abandon(session_id: str):
-    """Demo: mark cart as abandoned and return items info"""
+@app.get("/demo/cart/{session_id}")
+async def demo_get_cart(session_id: str):
+    """Demo: get current cart info without modifying it"""
     cart = db.carts.find_one({"session_id": session_id, "status": "active"})
 
     if cart:
-        db.carts.update_one(
-            {"_id": cart["_id"]},
-            {"$set": {"status": "abandoned", "abandoned_at": datetime.now()}}
-        )
-        return {"status": "abandoned", "cart_id": cart["_id"], "items": cart["items"], "total": cart["total_amount"]}
+        return {"status": "active", "cart_id": cart["_id"], "items": cart["items"], "total": cart["total_amount"]}
 
     return {"status": "empty", "cart_id": None, "items": [], "total": 0}
 
@@ -530,6 +595,61 @@ async def demo_sms(request: DemoSmsRequest):
     msg = request.message or "Assalamu Alaikum! This is a test SMS from Marhaba Haji Chatbot. Your booking is ready! Reply HELP for assistance."
     result = send_sms(request.phone, msg)
     return {"status": result["status"], "to": request.phone, "result": result}
+
+class DemoAbandonRequest(BaseModel):
+    phone: str
+    cart_total: Optional[float] = 1500.0
+    package_name: Optional[str] = None
+
+@app.post("/api/demo-abandon")
+async def demo_abandon(request: DemoAbandonRequest):
+    """Send BOTH WhatsApp AND SMS abandoned cart reminder (parallel, real Twilio only)."""
+    phone = normalize_phone(request.phone)
+    if not phone or len(phone) < 10:
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid phone. Save number with country code, e.g. +919790562321",
+        )
+
+    package_name = request.package_name or "Deluxe Umrah Package"
+    cart_total = request.cart_total
+
+    message_body = f"""Marhaba Haji!
+
+You left {package_name} in your cart (Total: ${cart_total:,.2f}).
+
+Complete your booking now:
+http://localhost:8000/cart/resume
+
+Reply HELP for assistance.
+
+Marhaba Haji Team"""
+
+    sms_body = f"Marhaba Haji! You left {package_name} (${cart_total:,.2f}) in your cart. Complete booking: http://localhost:8000/cart/resume - Reply HELP for assistance."
+
+    loop = asyncio.get_event_loop()
+    sms_result, whatsapp_result = await asyncio.gather(
+        loop.run_in_executor(None, lambda: send_sms(phone, sms_body, strict=True)),
+        loop.run_in_executor(None, lambda: send_whatsapp(phone, message_body, strict=True)),
+    )
+
+    return {
+        "sms": sms_result,
+        "whatsapp": whatsapp_result,
+        "to": phone,
+    }
+
+# ============ WHATSAPP WEBHOOK (TWILIO SANDBOX) ============
+@app.post("/webhook")
+async def whatsapp_webhook(Body: str = Form(...), From: str = Form(...)):
+    """Receive WhatsApp messages from Twilio Sandbox and auto-reply"""
+    try:
+        print(f"\n[WhatsApp] message from {From}: {Body}")
+    except UnicodeEncodeError:
+        print(f"\n[WhatsApp] message from {From!r}")
+    twilio_response = MessagingResponse()
+    twilio_response.message("Assalamu Alaikum! Welcome to Marhaba Haji AI")
+    return Response(content=str(twilio_response), media_type="application/xml")
 
 # ============ SCHEDULER ============
 scheduler = BackgroundScheduler()

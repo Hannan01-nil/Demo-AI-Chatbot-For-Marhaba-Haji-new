@@ -1,0 +1,16 @@
+.git
+venv
+.venv
+__pycache__
+*.pyc
+*.pyo
+*.log
+.env
+backend/.env
+scripts
+frontend
+_*.py
+run_recovery_test.py
+check_status.py
+main.py
+start.bat

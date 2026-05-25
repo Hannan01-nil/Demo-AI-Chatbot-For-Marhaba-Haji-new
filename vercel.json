@@ -1,0 +1,18 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "rewrites": [
+    {
+      "source": "/api/:path*",
+      "destination": "/api/index.py"
+    },
+    {
+      "source": "/((?!api/).*)",
+      "destination": "/index.html"
+    }
+  ],
+  "functions": {
+    "api/index.py": {
+      "excludeFiles": "{scripts/**,frontend/**,**/__pycache__/**,**/*.pyc,_*.py,run_recovery_test.py,check_status.py,main.py,start.bat}"
+    }
+  }
+}

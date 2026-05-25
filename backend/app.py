@@ -1,6 +1,6 @@
 # backend/app.py - Complete with Twilio SMS + Email Recovery (MongoDB)
 
-from fastapi import FastAPI, HTTPException, BackgroundTasks, Form, Response
+from fastapi import FastAPI, HTTPException, Form, Response
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import Optional
@@ -12,7 +12,6 @@ import uuid
 from dotenv import load_dotenv
 from apscheduler.schedulers.background import BackgroundScheduler
 import atexit
-import requests
 from twilio.twiml.messaging_response import MessagingResponse
 
 from database.connection import db
@@ -195,7 +194,8 @@ def generate_recovery_message(items, total, cart_id, channel):
     if len(items) > 2:
         items_text += f" and {len(items)-2} more"
 
-    resume_url = f"http://localhost:8000/cart/resume/{cart_id}"
+    app_url = os.getenv("APP_URL", "http://localhost:8000").rstrip("/")
+    resume_url = f"{app_url}/cart/resume/{cart_id}"
 
     if channel in ("sms", "whatsapp"):
         return f"""Assalamu Alaikum!
@@ -522,19 +522,24 @@ async def chat(chat_request: ChatRequest):
         "created_at": now
     })
 
-    # Load last 20 messages for context
+    # Load previous messages for context. The current user message is sent separately below.
     raw_history = db.messages.find(
-        {"conversation_id": conv_id}
+        {"conversation_id": conv_id, "created_at": {"$lt": now}}
     ).sort("created_at", 1).limit(20)
 
     raw_messages = [{"role": m["role"], "content": m["content"]} for m in raw_history]
     gemini_history = gemini_service.format_history_for_gemini(raw_messages)
 
     try:
-        if not gemini_service.is_available():
-            raise RuntimeError("Gemini AI is not configured. Add GOOGLE_API_KEY to .env")
-
-        reply = gemini_service.generate_response(chat_request.message, gemini_history)
+        if gemini_service.is_available():
+            reply = gemini_service.generate_response(chat_request.message, gemini_history)
+        else:
+            reply = (
+                "Assalamu Alaikum! I can help with Economy Umrah, Deluxe Umrah, "
+                "Premium Hajj, visa requirements, hotels, and transport. Gemini is "
+                "not configured yet, so add GOOGLE_API_KEY to enable full AI replies. "
+                "Would you like to see the packages?"
+            )
     except Exception as e:
         reply = str(e)
 
@@ -555,7 +560,7 @@ def root():
 
 @app.get("/packages")
 def get_packages():
-    packages = db.packages.find({})
+    packages = db.packages.find({}).sort("_id", 1)
     return {"packages": [{"id": p["_id"], "name": p["name"], "price": p["price"], "duration": p["duration"], "description": p["description"]} for p in packages]}
 
 @app.get("/analytics/abandoned")
@@ -589,7 +594,8 @@ class DemoSmsRequest(BaseModel):
     phone: str
     message: Optional[str] = None
 
-@app.post("/api/demo-sms")
+@app.post("/demo-sms")
+@app.post("/api/demo-sms", include_in_schema=False)
 async def demo_sms(request: DemoSmsRequest):
     """Simple demo endpoint to send SMS to any number"""
     msg = request.message or "Assalamu Alaikum! This is a test SMS from Marhaba Haji Chatbot. Your booking is ready! Reply HELP for assistance."
@@ -601,7 +607,8 @@ class DemoAbandonRequest(BaseModel):
     cart_total: Optional[float] = 1500.0
     package_name: Optional[str] = None
 
-@app.post("/api/demo-abandon")
+@app.post("/demo-abandon")
+@app.post("/api/demo-abandon", include_in_schema=False)
 async def demo_abandon(request: DemoAbandonRequest):
     """Send BOTH WhatsApp AND SMS abandoned cart reminder (parallel, real Twilio only)."""
     phone = normalize_phone(request.phone)
@@ -619,13 +626,14 @@ async def demo_abandon(request: DemoAbandonRequest):
 You left {package_name} in your cart (Total: ${cart_total:,.2f}).
 
 Complete your booking now:
-http://localhost:8000/cart/resume
+{os.getenv("APP_URL", "http://localhost:8000").rstrip("/")}/cart/resume
 
 Reply HELP for assistance.
 
 Marhaba Haji Team"""
 
-    sms_body = f"Marhaba Haji! You left {package_name} (${cart_total:,.2f}) in your cart. Complete booking: http://localhost:8000/cart/resume - Reply HELP for assistance."
+    app_url = os.getenv("APP_URL", "http://localhost:8000").rstrip("/")
+    sms_body = f"Marhaba Haji! You left {package_name} (${cart_total:,.2f}) in your cart. Complete booking: {app_url}/cart/resume - Reply HELP for assistance."
 
     loop = asyncio.get_event_loop()
     sms_result, whatsapp_result = await asyncio.gather(
@@ -652,10 +660,12 @@ async def whatsapp_webhook(Body: str = Form(...), From: str = Form(...)):
     return Response(content=str(twilio_response), media_type="application/xml")
 
 # ============ SCHEDULER ============
-scheduler = BackgroundScheduler()
-scheduler.add_job(func=detect_abandoned_carts, trigger="interval", minutes=15, id="abandoned_cart_check")
-scheduler.start()
-atexit.register(lambda: scheduler.shutdown())
+scheduler = None
+if os.getenv("VERCEL") != "1" or os.getenv("ENABLE_SCHEDULER") == "true":
+    scheduler = BackgroundScheduler()
+    scheduler.add_job(func=detect_abandoned_carts, trigger="interval", minutes=15, id="abandoned_cart_check")
+    scheduler.start()
+    atexit.register(lambda: scheduler.shutdown())
 
 # ============ START SERVER ============
 if __name__ == "__main__":

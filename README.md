@@ -1,173 +1,252 @@
-# Marhaba Haji Chatbot — Complete Setup Guide
+# Marhaba Haji Chatbot
 
-Hajj & Umrah booking assistant with SMS/Email recovery.
+AI chatbot for Hajj and Umrah package assistance, cart recovery, SMS, WhatsApp, email alerts, and basic abandoned-cart analytics.
 
-## 1. Install Python packages
+The project has a FastAPI backend, a static HTML frontend, MongoDB storage, Gemini AI responses, Twilio messaging, SendGrid email, and Vercel deployment support.
 
-Open PowerShell or Command Prompt and run:
+## Features
 
-```powershell
-pip install fastapi uvicorn google-generativeai python-dotenv twilio sendgrid
-pip install apscheduler pydantic requests
+- Chat assistant for Hajj and Umrah package questions
+- Package listing and cart management
+- Abandoned-cart recovery flow
+- SMS and WhatsApp alerts through Twilio
+- Email alerts through SendGrid
+- MongoDB-backed conversations, carts, packages, and recovery logs
+- Static frontend that works locally and on Vercel
+- FastAPI backend deployable as a Vercel Python Function
+
+## Project Structure
+
+```text
+Demo-AI-Chatbot-For-Marhaba-Haji-new/
+|-- README.md
+|-- requirements.txt
+|-- start.bat
+|-- vercel.json
+|-- .vercelignore
+|-- api/
+|   `-- index.py
+|-- backend/
+|   |-- app.py
+|   |-- .env
+|   |-- .env.example
+|   |-- database/
+|   |   |-- __init__.py
+|   |   |-- connection.py
+|   |   `-- viewer.py
+|   |-- services/
+|   |   `-- gemini_service.py
+|   `-- utils/
+|       |-- email_sendgrid.py
+|       `-- sms_twilio.py
+|-- frontend/
+|   `-- index.html
+|-- public/
+|   `-- index.html
+|-- scripts/
+|   |-- test_email.py
+|   |-- test_recovery.py
+|   |-- test_sms.py
+|   `-- view_database.py
+|-- main.py
+|-- check_status.py
+|-- run_recovery_test.py
+|-- _test_webhook.py
+|-- _verify_abandon_workflow.py
+`-- _verify_env.py
 ```
 
-Or use the included virtual environment:
+## Important Files
+
+- `backend/app.py`: Main FastAPI app for chat, packages, cart, recovery, analytics, and Twilio webhook routes.
+- `backend/database/connection.py`: MongoDB connection and package seed setup.
+- `backend/services/gemini_service.py`: Gemini AI integration.
+- `frontend/index.html`: Local development frontend.
+- `public/index.html`: Vercel static frontend.
+- `api/index.py`: Vercel Python Function entrypoint for the FastAPI backend.
+- `vercel.json`: Vercel routing. `/api/*` goes to FastAPI, everything else serves the frontend.
+- `start.bat`: Windows helper to install packages, start backend, and start ngrok.
+
+## Requirements
+
+- Python 3.10+ locally
+- MongoDB running locally or MongoDB Atlas
+- Gemini API key
+- Twilio credentials for SMS/WhatsApp features
+- SendGrid API key for email features
+- Ngrok only if you want to test Twilio webhooks locally
+
+## Install
+
+From the project root:
 
 ```powershell
+pip install -r requirements.txt
+```
+
+Optional virtual environment:
+
+```powershell
+python -m venv venv
 venv\Scripts\activate
 pip install -r requirements.txt
 ```
 
+## Environment Variables
 
-## 2. Environment variables
-
-Edit `backend/.env` with your API keys and contact info, for example:
+Create `backend/.env` for local development. You can copy `backend/.env.example` and fill in the real values:
 
 ```env
-# Google Gemini AI
-GOOGLE_API_KEY=your_gemini_api_key_here
+MONGODB_URI=mongodb://localhost:27017
+MONGODB_DB_NAME=marhaba_haji
 
-# Twilio (SMS)
+GOOGLE_API_KEY=your_gemini_api_key
+
 TWILIO_ACCOUNT_SID=your_twilio_sid
-TWILIO_AUTH_TOKEN=your_twilio_token
+TWILIO_AUTH_TOKEN=your_twilio_auth_token
 TWILIO_PHONE_NUMBER=+1234567890
 
-# SendGrid (Email)
 SENDGRID_API_KEY=SG.your_sendgrid_key
-EMAIL_FROM=noreply@yourdomain.com
-EMAIL_TO=admin@example.com
+EMAIL_FROM=noreply@example.com
 
-# Admin contact (for testing)
 ADMIN_PHONE=+1234567890
 ADMIN_EMAIL=admin@example.com
+
+APP_URL=http://localhost:8000
 ```
 
-How to get API keys:
+For Vercel, add the same values in Vercel Project Settings instead of uploading `.env`.
 
-- Gemini AI: https://aistudio.google.com/app/apikey
-- Twilio: https://console.twilio.com
-- SendGrid: https://app.sendgrid.com/settings/api_keys
+## Run Locally
 
-
-## 3. Run the system
-
-Option A: Double-click `start.bat`.
-
-Option B — command-line:
+Option 1, use the helper:
 
 ```powershell
-venv\Scripts\activate
+.\start.bat
+```
+
+Option 2, run the backend manually:
+
+```powershell
 cd backend
 python app.py
 ```
 
-Server: http://localhost:8000
-API docs: http://localhost:8000/docs
+Backend:
 
-The abandoned-cart detector runs periodically (default: every 15 minutes).
+```text
+http://localhost:8000
+```
 
+API docs:
 
-## 4. Test SMS
+```text
+http://localhost:8000/docs
+```
 
-Run the Twilio test script:
+Frontend:
+
+```text
+frontend/index.html
+```
+
+Open `frontend/index.html` in your browser. When opened from the file system, it automatically calls `http://localhost:8000`.
+
+## Local Webhook Testing
+
+`start.bat` also starts:
+
+```powershell
+ngrok http 8000
+```
+
+Copy the HTTPS ngrok URL and set your Twilio Sandbox webhook:
+
+```text
+https://YOUR_NGROK_URL/webhook
+```
+
+## Vercel Deployment
+
+This repo is prepared for Vercel:
+
+- `public/index.html` is served as the frontend.
+- `api/index.py` exposes the FastAPI backend.
+- `vercel.json` rewrites `/api/*` to the backend and all other paths to the frontend.
+- `.vercelignore` prevents local secrets, scripts, pycache files, and dev-only files from being deployed.
+
+Set these environment variables in Vercel:
+
+```env
+MONGODB_URI=your_mongodb_atlas_connection_string
+MONGODB_DB_NAME=marhaba_haji
+GOOGLE_API_KEY=your_gemini_api_key
+TWILIO_ACCOUNT_SID=your_twilio_sid
+TWILIO_AUTH_TOKEN=your_twilio_auth_token
+TWILIO_PHONE_NUMBER=+1234567890
+SENDGRID_API_KEY=SG.your_sendgrid_key
+EMAIL_FROM=noreply@example.com
+APP_URL=https://your-vercel-domain.vercel.app
+```
+
+Use MongoDB Atlas or another hosted MongoDB for deployment. `mongodb://localhost:27017` only works on your own machine.
+
+## API Endpoints
+
+Local endpoints use `http://localhost:8000`. On Vercel, prefix backend routes with `/api`.
+
+| Method | Local Path | Vercel Path | Description |
+|---|---|---|---|
+| GET | `/` | `/api/` | Server status |
+| GET | `/docs` | `/api/docs` | Swagger API docs |
+| POST | `/chat/send` | `/api/chat/send` | Send a chat message |
+| GET | `/packages` | `/api/packages` | List packages |
+| POST | `/cart/add/{session_id}` | `/api/cart/add/{session_id}` | Add item to cart |
+| GET | `/cart/{session_id}` | `/api/cart/{session_id}` | Get active cart |
+| DELETE | `/cart/remove/{session_id}/{package_id}` | `/api/cart/remove/{session_id}/{package_id}` | Remove item |
+| GET | `/cart/resume/{cart_id}` | `/api/cart/resume/{cart_id}` | Resume recovered cart |
+| POST | `/cart/recovery/manual/{cart_id}` | `/api/cart/recovery/manual/{cart_id}` | Trigger recovery manually |
+| GET | `/analytics/abandoned` | `/api/analytics/abandoned` | Abandoned-cart stats |
+| POST | `/demo-sms` | `/api/demo-sms` | Send demo SMS |
+| POST | `/demo-abandon` | `/api/demo-abandon` | Send demo SMS and WhatsApp recovery alert |
+| POST | `/webhook` | `/api/webhook` | Twilio WhatsApp webhook |
+
+## Scripts
 
 ```powershell
 python scripts/test_sms.py
-```
-
-This tests Twilio connectivity, sends a test SMS to `ADMIN_PHONE`, and shows account info.
-
-
-## 5. Test Email
-
-Run the SendGrid test script:
-
-```powershell
 python scripts/test_email.py
-```
-
-This tests SendGrid connectivity and sends a test email to `ADMIN_EMAIL`.
-
-
-## 6. View Database
-
-Interactive viewer:
-
-```powershell
+python scripts/test_recovery.py
 python scripts/view_database.py
 ```
 
-Or the simpler viewer:
+Additional local helper scripts:
 
 ```powershell
-python backend/utils/db_viewer.py
+python check_status.py
+python run_recovery_test.py
+python _verify_env.py
+python _verify_abandon_workflow.py
+python _test_webhook.py
 ```
 
-The interactive menu lets you view carts, recovery logs, statistics, and export data.
+## Troubleshooting
 
+- Backend not opening: make sure `python app.py` is running inside `backend/`.
+- `No module named ...`: run `pip install -r requirements.txt`.
+- MongoDB errors: check `MONGODB_URI` and make sure MongoDB is running or Atlas allows your IP.
+- Gemini not responding: check `GOOGLE_API_KEY`.
+- SMS or WhatsApp not sending: check Twilio credentials and Sandbox setup.
+- Email not sending: check `SENDGRID_API_KEY` and `EMAIL_FROM`.
+- Port 8000 in use: stop the other process or change the `uvicorn.run` port in `backend/app.py`.
+- Vercel database failure: replace local MongoDB URI with MongoDB Atlas.
 
-## 7. Test Recovery Flow
+## Current Local Check
 
-```powershell
-python scripts/test_recovery.py
-```
+The backend was verified locally on port `8000` with:
 
-This script creates a test session/cart, simulates abandonment, triggers recovery detection, and shows recovery attempts.
+- `GET /`
+- `GET /packages`
+- `POST /chat/send`
 
-
-## 8. API Endpoints
-
-| Method | Path | Description |
-|---|---|---|
-| GET | / | Server status |
-| GET | /docs | Swagger API documentation |
-| POST | /chat/send | Send chat message |
-| GET | /packages | List all packages |
-| POST | /cart/add/{session_id} | Add item to cart |
-| GET | /cart/{session_id} | Get current cart |
-| DELETE | /cart/remove/{session_id}/{pkg} | Remove from cart |
-| GET | /cart/resume/{cart_id} | Resume abandoned cart |
-| POST | /cart/recovery/manual/{cart_id} | Manually trigger recovery |
-| GET | /analytics/abandoned | Abandoned cart statistics |
-
-
-## 9. Troubleshooting
-
-- "No module named ..." — run `pip install <module_name>`.
-- Database errors — delete `backend/database/marhaba.db` and restart (auto-creates).
-- Gemini AI not responding — verify `GOOGLE_API_KEY` in `.env` (no leading spaces).
-- SMS not sending — verify Twilio credentials and `TWILIO_PHONE_NUMBER`. Check balance via `sms_twilio.py`.
-- Email not sending — verify `SENDGRID_API_KEY` and `EMAIL_FROM`.
-- Port 8000 in use — change port in `app.py` (uvicorn.run) or stop the other process.
-- `start.bat` closes immediately — run it from terminal to see errors and ensure `venv/` exists.
-- Recovery not triggering — wait 30+ minutes or run `scripts/test_recovery.py`. Check `last_activity` timestamps.
-
-
-## 10. Project structure
-
-```
-marhaba-chatbot/
-├── start.bat
-├── README.md
-├── venv/
-├── backend/
-│   ├── app.py
-│   ├── .env
-│   ├── database/
-│   │   └── marhaba.db
-│   └── utils/
-│       ├── sms_twilio.py
-│       ├── email_sendgrid.py
-│       └── db_viewer.py
-├── frontend/
-│   └── index.html
-└── scripts/
-  ├── test_sms.py
-  ├── test_email.py
-  ├── test_recovery.py
-  └── view_database.py
-```
-
----
-
-If you want, I can also update `backend/.env.example` with the sample variables or commit this change.
+All returned `200 OK`.

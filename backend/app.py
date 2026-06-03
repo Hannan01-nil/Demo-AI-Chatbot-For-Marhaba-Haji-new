@@ -14,8 +14,8 @@ from apscheduler.schedulers.background import BackgroundScheduler
 import atexit
 from twilio.twiml.messaging_response import MessagingResponse
 
-from database.connection import db
-from services.gemini_service import gemini_service
+from backend.database.connection import db
+from backend.services.gemini_service import gemini_service
 
 # Load environment variables
 load_dotenv()

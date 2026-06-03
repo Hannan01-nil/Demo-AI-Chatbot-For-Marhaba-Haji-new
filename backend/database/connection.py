@@ -1,7 +1,4 @@
 import os
-import dns.resolver
-dns.resolver.get_default_resolver().nameservers = ['8.8.8.8', '1.1.1.1']
-
 from pymongo import MongoClient
 from dotenv import load_dotenv
 
@@ -10,11 +7,23 @@ load_dotenv(os.path.join(os.path.dirname(__file__), "..", ".env"))
 MONGODB_URI = os.getenv("MONGODB_URI", "mongodb://localhost:27017")
 MONGODB_DB_NAME = os.getenv("MONGODB_DB_NAME", "marhaba_haji")
 
-client = MongoClient(MONGODB_URI)
-db = client[MONGODB_DB_NAME]
+_client = None
+_db = None
 
 
-def init_db():
+def get_db():
+    global _client, _db
+    if _db is None:
+        import dns.resolver
+        dns.resolver.get_default_resolver().nameservers = ['8.8.8.8', '1.1.1.1']
+        _client = MongoClient(MONGODB_URI)
+        _db = _client[MONGODB_DB_NAME]
+        _init_db()
+    return _db
+
+
+def _init_db():
+    db = _db
     db.conversations.create_index("session_id")
     db.messages.create_index("conversation_id")
     db.messages.create_index([("conversation_id", 1), ("created_at", 1)])
@@ -32,7 +41,5 @@ def init_db():
         ]
         db.packages.insert_many(packages)
 
-    print("Database Ready")
 
-
-init_db()
+db = get_db()

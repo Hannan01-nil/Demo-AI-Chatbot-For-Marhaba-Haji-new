@@ -716,7 +716,7 @@
         const SESSION_ID = 'session_' + Date.now() + '_' + Math.random().toString(36).substr(2, 9);
         const API_BASE = ['file:', 'null'].includes(window.location.protocol)
             ? 'http://localhost:8000'
-            : '/api';
+            : '';
         let userPhone = localStorage.getItem('userPhone') || '';
         let userEmail = localStorage.getItem('userEmail') || '';
 

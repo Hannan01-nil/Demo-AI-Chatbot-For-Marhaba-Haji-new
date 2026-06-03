@@ -10,7 +10,7 @@ if __name__ == "__main__":
     import uvicorn
 
     FRONTEND = Path(__file__).resolve().parent / "public" / "index.html"
-    PORT = 8000
+    PORT = int(os.getenv("PORT", 8000))
 
     def _open_browser():
         import time
@@ -32,4 +32,4 @@ if __name__ == "__main__":
     print("  Press Ctrl+C to stop\n")
 
     os.environ.setdefault("VERCEL", "")
-    uvicorn.run("backend.app:app", host="127.0.0.1", port=PORT, reload=True)
+    uvicorn.run("backend.app:app", host="0.0.0.0", port=PORT)

@@ -2,6 +2,7 @@
 
 from fastapi import FastAPI, HTTPException, Form, Response
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from typing import Optional
 import os
@@ -9,6 +10,7 @@ import asyncio
 import re
 from datetime import datetime, timedelta
 import uuid
+from pathlib import Path
 from dotenv import load_dotenv
 from apscheduler.schedulers.background import BackgroundScheduler
 import atexit
@@ -31,6 +33,12 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Mount frontend static files
+_PROJECT_ROOT = Path(__file__).resolve().parent.parent
+_FRONTEND_DIR = _PROJECT_ROOT / "frontend"
+if _FRONTEND_DIR.exists():
+    app.mount("/", StaticFiles(directory=str(_FRONTEND_DIR), html=True), name="frontend")
 
 # ============ TWILIO SMS SETUP ============
 TWILIO_ACCOUNT_SID = os.getenv("TWILIO_ACCOUNT_SID")
@@ -194,7 +202,8 @@ def generate_recovery_message(items, total, cart_id, channel):
     if len(items) > 2:
         items_text += f" and {len(items)-2} more"
 
-    app_url = os.getenv("APP_URL", "http://localhost:8000").rstrip("/")
+    port = os.getenv("PORT", "8000")
+    app_url = os.getenv("APP_URL", f"http://localhost:{port}").rstrip("/")
     resume_url = f"{app_url}/cart/resume/{cart_id}"
 
     if channel in ("sms", "whatsapp"):
@@ -554,8 +563,16 @@ async def chat(chat_request: ChatRequest):
 
     return ChatResponse(reply=reply)
 
+@app.get("/status")
+def status():
+    return {"status": "running", "message": "Marhaba Haji Chatbot with Recovery"}
+
 @app.get("/")
 def root():
+    index = _FRONTEND_DIR / "index.html"
+    if index.exists():
+        from fastapi.responses import HTMLResponse
+        return HTMLResponse(content=index.read_text(encoding="utf-8"))
     return {"status": "running", "message": "Marhaba Haji Chatbot with Recovery"}
 
 @app.get("/packages")
@@ -621,18 +638,19 @@ async def demo_abandon(request: DemoAbandonRequest):
     package_name = request.package_name or "Deluxe Umrah Package"
     cart_total = request.cart_total
 
+    port = os.getenv("PORT", "8000")
+    app_url = os.getenv("APP_URL", f"http://localhost:{port}").rstrip("/")
+
     message_body = f"""Marhaba Haji!
 
 You left {package_name} in your cart (Total: ${cart_total:,.2f}).
 
 Complete your booking now:
-{os.getenv("APP_URL", "http://localhost:8000").rstrip("/")}/cart/resume
+{app_url}/cart/resume
 
 Reply HELP for assistance.
 
 Marhaba Haji Team"""
-
-    app_url = os.getenv("APP_URL", "http://localhost:8000").rstrip("/")
     sms_body = f"Marhaba Haji! You left {package_name} (${cart_total:,.2f}) in your cart. Complete booking: {app_url}/cart/resume - Reply HELP for assistance."
 
     loop = asyncio.get_event_loop()
@@ -670,11 +688,12 @@ if os.getenv("VERCEL") != "1" or os.getenv("ENABLE_SCHEDULER") == "true":
 # ============ START SERVER ============
 if __name__ == "__main__":
     import uvicorn
+    port = int(os.getenv("PORT", 8000))
     print("\n" + "="*50)
     print("Marhaba Haji Chatbot with Recovery")
-    print("http://localhost:8000")
-    print("http://localhost:8000/docs")
+    print(f"http://0.0.0.0:{port}")
+    print(f"http://0.0.0.0:{port}/docs")
     print("SMS via Twilio | Email via SendGrid")
     print("Abandoned cart detection every 15 min")
     print("="*50 + "\n")
-    uvicorn.run(app, host="127.0.0.1", port=8000)
+    uvicorn.run(app, host="0.0.0.0", port=port)
